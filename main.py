@@ -5,9 +5,9 @@ Downloads YouTube videos from Discord and plays them on a Pygame GUI
 Last Modified 20 September 2026
 '''
 
-###########
-# IMPORTS #
-###########
+#############
+# LIBRARIES #
+#############
 
 import asyncio, discord, glob, numpy as np, os, pyautogui, pygame, sys, yt_dlp
 from discord.ext import commands
