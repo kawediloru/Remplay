@@ -8,6 +8,7 @@ Last Modified 20 September 2026
 ###########
 # IMPORTS #
 ###########
+
 import discord, glob, numpy as np, os, pyautogui, pygame, sys, yt_dlp
 from discord.ext import commands
 from moviepy.editor import VideoFileClip, vfx # moviepy==1.0.3
