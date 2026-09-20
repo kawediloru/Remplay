@@ -143,14 +143,15 @@ class VideoPlayer:
     own window, which can then be displayed in OBS
     '''
 
+    # customization
     FULLSCREEN = True
     SCALE = 1
     VOLUME = 100
 
-    SLEEP_LEN = 1
-
+    # i suggest not touching these
     WIDTH, HEIGHT = pyautogui.size()
     CQUEUE_SIZE = 5
+    SLEEP_LEN = 1
 
 
 
