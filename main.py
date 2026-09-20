@@ -297,7 +297,7 @@ class VideoPlayer:
             try:
                 clip = self.clipQueue.get_nowait()
                 self.play_video(clip)
-            except:
+            except Empty:
                 pass
 
 
