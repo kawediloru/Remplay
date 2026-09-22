@@ -2,14 +2,14 @@
 Remplay
 Made by Kawediloru
 Downloads YouTube videos from Discord and plays them on a Pygame GUI
-Last Modified 20 September 2026
+Last Modified 22 September 2026
 '''
 
-#############
-# LIBRARIES #
-#############
+###########
+# IMPORTS #
+###########
 
-import asyncio, discord, glob, numpy as np, os, pyautogui, pygame, sys, yt_dlp
+import asyncio, discord, glob, os, pyautogui, pygame, sys, yt_dlp
 from discord.ext import commands
 from moviepy.editor import VideoFileClip, vfx # moviepy==1.0.3
 from pathlib import Path
@@ -33,8 +33,8 @@ class DiscordReader(commands.Bot):
     '''
 
     # Bot token and channels to read from
-    TOKEN = "" # Bot token goes here
-    CHANNELS = {} # Channels to read from go here
+    TOKEN = sys.argv[1] # Type the token in when running the bot
+    CHANNELS = {} # Channels (ids) to read from go here
 
     def __init__(self):
         '''
@@ -158,6 +158,7 @@ class VideoPlayer:
     FULLSCREEN = True
     SCALE = 1
     VOLUME = 100
+    CLEAR_FILES = True
 
     # only for performance
     CQUEUE_SIZE = 5
@@ -178,6 +179,8 @@ class VideoPlayer:
 
         self.fileQueue = Queue()
         self.clipQueue = Queue(maxsize=VideoPlayer.CQUEUE_SIZE)
+        self.frameQueue = Queue()
+        self.deleteQueue = Queue()
 
         self.thrQueueManagement = Thread(target=self.fill_clip_queue, daemon=True)
         self.thrQueueManagement.start()
@@ -194,6 +197,9 @@ class VideoPlayer:
                 name = self.fileQueue.get()
                 clip = self.filename_to_video_object(name)
                 self.clipQueue.put(clip)
+                if VideoPlayer.CLEAR_FILES:
+                    self.deleteQueue.put(name)
+            
             except Exception as e:
                 print(f"Failed to append clip: {e}")
 
@@ -215,8 +221,7 @@ class VideoPlayer:
 
 
 
-    @staticmethod
-    def stop_video(clip):
+    def stop_video(self, clip):
         '''
         Stop the currently playing clip and signal the next one
         '''
@@ -224,8 +229,16 @@ class VideoPlayer:
         try:
             pygame.mixer.music.stop()
             pygame.mixer.music.unload()
-        except pygame.error as e:
-            print(f"Failed to unload music: e")
+        
+        except Exception as e:
+            print(f"Failed to unload music: {e}")
+        
+        if VideoPlayer.CLEAR_FILES:
+            try:
+                os.remove("cur.wav")
+                os.remove(self.deleteQueue.get_nowait())
+            except:
+                pass
         
         clip.close()
 
@@ -244,11 +257,34 @@ class VideoPlayer:
 
 
 
+    def format_frames(self, clip):
+        '''
+        Function to handle the complex math to format frames so
+        they can render in a Pygame window, in a different thread
+        '''
+
+        try:
+            for frame in clip.iter_frames(dtype="uint8"):
+                surf = pygame.surfarray.make_surface(frame)
+                rect = surf.get_rect(center=((self.WIDTH * VideoPlayer.SCALE) // 2, (self.HEIGHT * VideoPlayer.SCALE) // 2))
+                self.frameQueue.put((surf, rect))
+        
+        except Exception as e:
+            print(f"Error formatting video: {e}")
+
+        self.frameQueue.put(None)
+
+
+
     def play_video(self, clip):
         '''
         Function that actively plays a video to the screen.
         '''
-        
+
+        # start formatting the frames in a separate thread to offload the work
+        formFramesThread = Thread(target=self.format_frames, args=(clip,), daemon=True)
+        formFramesThread.start()
+
         # if there's audio, play it
         if clip.audio:
             try:
@@ -257,7 +293,12 @@ class VideoPlayer:
                 print(f"Current audio failed to load: {e}")
         
         try:
-            for frame in clip.iter_frames(dtype="uint8"):
+            while True:
+                # get formatted frame from the queue
+                frame = self.frameQueue.get()
+                if frame == None:
+                    break
+                
                 # check for events (also to tick pygame)
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
@@ -268,19 +309,17 @@ class VideoPlayer:
                             VideoPlayer.stop_video(clip)
                             return
                 
-                # draw it properly
-                frameSurface = pygame.surfarray.make_surface(frame)
-                clipRect = frameSurface.get_rect(center=((self.WIDTH * VideoPlayer.SCALE) // 2, (self.HEIGHT * VideoPlayer.SCALE) // 2))
+                # render frame
                 self.screen.fill((0, 0, 0))
-                self.screen.blit(frameSurface, clipRect)
+                self.screen.blit(*frame)
                 pygame.display.update()
                 
                 self.CLOCK.tick(clip.fps)
         
-        except OSError as e:
+        except Exception as e:
             print(f"Current video failed to load: {e}")
-        
-        VideoPlayer.stop_video(clip)
+
+        self.stop_video(clip)
 
 
 
@@ -289,6 +328,7 @@ class VideoPlayer:
         Function to manage the playing of videos in generallll ig
         Basically waits for a video to enter the queue before playing
         '''
+
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
