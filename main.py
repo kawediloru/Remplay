@@ -75,6 +75,10 @@ class DiscordReader(commands.Bot):
                         await msg.channel.send(f"Please keep videos under {VideoDownloader.MAX_LENGTH} seconds.", delete_after=5.0)
                         await msg.add_reaction("❌")
                         continue
+                    elif vidLen == 0:
+                        await msg.channel.send(f"Please send a valid video.", delete_after=5.0)
+                        await msg.add_reaction("❌")
+                        continue
 
                     filename = f"{uuid4().hex}.{f.filename.split('.')[-1]}"
                     await f.save(filename)
@@ -94,6 +98,10 @@ class DiscordReader(commands.Bot):
                         await msg.channel.send(f"Please keep videos under {VideoDownloader.MAX_LENGTH} seconds.", delete_after=5.0)
                         await msg.add_reaction("❌")
                         continue
+                    elif vidLen == 0:
+                        await msg.channel.send(f"Please send a valid video.", delete_after=5.0)
+                        await msg.add_reaction("❌")
+                        continue
                     
                     await VideoDownloader.download_embedded_video(url)
                     await msg.add_reaction("✅")
@@ -103,6 +111,10 @@ class DiscordReader(commands.Bot):
                 vidLen = await VideoDownloader.find_linked_video_length(url)
                 if vidLen > VideoDownloader.MAX_LENGTH:
                     await msg.channel.send(f"Please keep videos under {VideoDownloader.MAX_LENGTH} seconds.", delete_after=5.0)
+                    await msg.add_reaction("❌")
+                    continue
+                elif vidLen == 0:
+                    await msg.channel.send(f"Please send a valid video.", delete_after=5.0)
                     await msg.add_reaction("❌")
                     continue
                 
@@ -155,11 +167,8 @@ class VideoDownloader:
         Get the length of the requested linked video. Or raise an error if it isn't one
         '''
 
-        try:
-            info_dict = yt_dlp.YoutubeDL().extract_info(url, download=False)
-            return info_dict.get("duration", 0)
-        except Exception as e:
-            raise e
+        infoDict = yt_dlp.YoutubeDL({"noplaylist": True}).extract_info(url, download=False)
+        return infoDict.get("duration", 0)
 
 
 
@@ -169,11 +178,8 @@ class VideoDownloader:
         Get the length of the requested embedded video. Or raise an error again !
         '''
 
-        try:
-            result = subprocess.run(["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", url], capture_output=True, text=True)
-            return float(json.loads(result.stdout)["format"]["duration"])
-        except Exception as e:
-            raise e
+        result = subprocess.run(["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", url], capture_output=True, text=True)
+        return float(json.loads(result.stdout)["format"]["duration"])
 
 
 
@@ -182,16 +188,12 @@ class VideoDownloader:
         '''
         Downloads the video if it's a link
         '''
-
-        try:
-            filename = f"video{uuid4().hex}"
-            video = yt_dlp.YoutubeDL({"outtmpl": f"{filename}.%(ext)s"})
-            video.download(url)
-
-            player.fileQueue.put(next(glob.iglob(f"{filename}.*")))
         
-        except Exception as e:
-            raise e
+        filename = f"video{uuid4().hex}"
+        video = yt_dlp.YoutubeDL({"outtmpl": f"{filename}.%(ext)s"})
+        video.download(url)
+
+        player.fileQueue.put(next(glob.iglob(f"{filename}.*")))
 
 
 
@@ -201,20 +203,16 @@ class VideoDownloader:
         Downloads the video if it's embedded
         '''
         
-        try:
-            filename = f"video{uuid4().hex}.{os.path.basename(urlparse(url).path).split('.')[-1]}"
+        filename = f"video{uuid4().hex}.{os.path.basename(urlparse(url).path).split('.')[-1]}"
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status != 200: raise RuntimeError
-                    data = await response.read()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200: raise RuntimeError
+                data = await response.read()
 
-            with open(filename, "wb") as f:
-                f.write(data)
-            player.fileQueue.put(filename)
-        
-        except Exception as e:
-            raise e
+        with open(filename, "wb") as f:
+            f.write(data)
+        player.fileQueue.put(filename)
 
 
 
