@@ -2,19 +2,20 @@
 Remplay
 Made by Kawediloru
 Downloads YouTube videos from Discord and plays them on a Pygame GUI
-Last Modified 22 September 2026
+Last Modified 3 October 2026
 '''
 
 #############
 # LIBRARIES #
 #############
 
-import asyncio, discord, glob, os, pyautogui, pygame, sys, yt_dlp
+import aiohttp, discord, glob, json, os, pyautogui, pygame, re, subprocess, sys, yt_dlp
 from discord.ext import commands
 from moviepy.editor import VideoFileClip, vfx # moviepy==1.0.3
 from pathlib import Path
 from queue import Queue, Empty
 from threading import Thread
+from urllib.parse import urlparse
 from uuid import uuid4
 
 
@@ -45,8 +46,6 @@ class DiscordReader(commands.Bot):
         intents.message_content = True
         super().__init__(command_prefix='!', intents=intents)
 
-        self.add_command(req)
-
 
 
     async def on_ready(self):
@@ -58,32 +57,63 @@ class DiscordReader(commands.Bot):
 
 
 
-# Commands for the bot need global scope. Because fuck you I guess?
-@commands.command()
-async def req(ctx, url):
-    '''
-    Request command which lets users send video requests in a target channel
-    '''
+    async def on_message(self, msg):
+        '''
+        Main functionality is here basically.
+        Checks if message is valid and prints
+        '''
 
-    if ctx.channel.id in DiscordReader.CHANNELS:
-        try:
-            vidLen = await asyncio.to_thread(YoutubeDownloader.find_video_length, url)
+        # ignore own/outside msgs
+        if (msg.author.bot) or (msg.channel.id not in DiscordReader.CHANNELS): return
 
-            if vidLen > YoutubeDownloader.MAX_LENGTH:
-                await ctx.send(f"Please keep videos under {YoutubeDownloader.MAX_LENGTH} seconds.", delete_after=5.0)
-                await ctx.message.add_reaction("❌")
-                return
-            
-            await asyncio.to_thread(YoutubeDownloader.download_video, url)
-            await ctx.message.add_reaction("✅")
-        
-        except Exception as e:
-            print(f"Unable to parse message: {e}")
-            await ctx.send("An error occurred!", delete_after=5.0)
-            await ctx.message.add_reaction("⚠️")
-    
-    else:
-        await ctx.send("Please use the assigned mediashare channel.", delete_after=5.0)
+        # handle attached files
+        for f in msg.attachments:
+            if f.content_type and f.content_type.startswith("video/"):
+                try:
+                    vidLen = await VideoDownloader.find_embedded_video_length(f.url)
+                    if vidLen > VideoDownloader.MAX_LENGTH:
+                        await msg.channel.send(f"Please keep videos under {VideoDownloader.MAX_LENGTH} seconds.", delete_after=5.0)
+                        await msg.add_reaction("❌")
+                        continue
+
+                    filename = f"{uuid4().hex}.{f.filename.split('.')[-1]}"
+                    await f.save(filename)
+                    player.fileQueue.put(filename)
+                    await msg.add_reaction("✅")
+                
+                except:
+                    await msg.add_reaction("⚠️")
+
+        # handle links
+        for url in re.findall(r"https?://\S+", msg.content):
+            try:
+                # embedded links
+                if any(ext in url for ext in VideoDownloader.EMBED_EXTS):
+                    vidLen = await VideoDownloader.find_embedded_video_length(url)
+                    if vidLen > VideoDownloader.MAX_LENGTH:
+                        await msg.channel.send(f"Please keep videos under {VideoDownloader.MAX_LENGTH} seconds.", delete_after=5.0)
+                        await msg.add_reaction("❌")
+                        continue
+                    
+                    await VideoDownloader.download_embedded_video(url)
+                    await msg.add_reaction("✅")
+                    continue
+
+                # external links
+                vidLen = await VideoDownloader.find_linked_video_length(url)
+                if vidLen > VideoDownloader.MAX_LENGTH:
+                    await msg.channel.send(f"Please keep videos under {VideoDownloader.MAX_LENGTH} seconds.", delete_after=5.0)
+                    await msg.add_reaction("❌")
+                    continue
+                
+                await VideoDownloader.download_linked_video(url)
+                await msg.add_reaction("✅")
+
+            # oops
+            except Exception as e:
+                print(f"Unable to parse message: {e}")
+                await msg.channel.send("An error occurred!", delete_after=5.0)
+                await msg.add_reaction("⚠️")
 
 
 
@@ -99,9 +129,9 @@ def run_bot():
 
 
 
-class YoutubeDownloader:
+class VideoDownloader:
     '''
-    Youtube Downloader functions.
+    Video Downloader functions.
     For checking the length of YT videos
     and downloading them if they're valid
     '''
@@ -109,12 +139,20 @@ class YoutubeDownloader:
     # customizable rule
     MAX_LENGTH = 60
 
+    # dont touch
+    EMBED_EXTS = [
+        ".avi",
+        ".mov",
+        ".mp4",
+        ".webm"
+        ]
+    
 
 
     @staticmethod
-    def find_video_length(url:str):
+    async def find_linked_video_length(url:str):
         '''
-        Get the length of the requested video. Or raise an error if it isn't one
+        Get the length of the requested linked video. Or raise an error if it isn't one
         '''
 
         try:
@@ -126,19 +164,54 @@ class YoutubeDownloader:
 
 
     @staticmethod
-    def download_video(url:str):
+    async def find_embedded_video_length(url:str):
         '''
-        Downloads the video
+        Get the length of the requested embedded video. Or raise an error again !
         '''
 
         try:
-            global player
+            result = subprocess.run(["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", url], capture_output=True, text=True)
+            return float(json.loads(result.stdout)["format"]["duration"])
+        except Exception as e:
+            raise e
 
+
+
+    @staticmethod
+    async def download_linked_video(url:str):
+        '''
+        Downloads the video if it's a link
+        '''
+
+        try:
             filename = f"video{uuid4().hex}"
             video = yt_dlp.YoutubeDL({"outtmpl": f"{filename}.%(ext)s"})
             video.download(url)
 
             player.fileQueue.put(next(glob.iglob(f"{filename}.*")))
+        
+        except Exception as e:
+            raise e
+
+
+
+    @staticmethod
+    async def download_embedded_video(url:str):
+        '''
+        Downloads the video if it's embedded
+        '''
+        
+        try:
+            filename = f"video{uuid4().hex}.{os.path.basename(urlparse(url).path).split('.')[-1]}"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status != 200: raise RuntimeError
+                    data = await response.read()
+
+            with open(filename, "wb") as f:
+                f.write(data)
+            player.fileQueue.put(filename)
         
         except Exception as e:
             raise e
